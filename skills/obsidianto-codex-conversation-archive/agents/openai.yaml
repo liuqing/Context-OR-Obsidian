@@ -1,0 +1,4 @@
+interface:
+  display_name: "ObsidianTo Codex 对话归档"
+  short_description: "把当前或指定 Codex 对话安全归档到 Obsidian，并保持双链与备份。"
+  default_prompt: "Use $obsidianto-codex-conversation-archive to archive this Codex conversation into the configured Obsidian conversation folder."

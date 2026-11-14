@@ -1,0 +1,149 @@
+diff --git a/periodic_jobs/ai_heartbeat/src/v0/observer.py b/periodic_jobs/ai_heartbeat/src/v0/observer.py
+index e0e098c..b23f268 100644
+--- a/periodic_jobs/ai_heartbeat/src/v0/observer.py
++++ b/periodic_jobs/ai_heartbeat/src/v0/observer.py
+@@ -8,13 +8,17 @@ from datetime import datetime
+ 
+ from opencode_client import OpenCodeClient
+ 
+-KNOWLEDGE_BASE = "/path/to/your/workspace/periodic_jobs/ai_heartbeat/docs/KNOWLEDGE_BASE.md"
++WORKSPACE_ROOT = os.getenv("CONTEXT_WORKSPACE_ROOT", os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", "..")))
++KNOWLEDGE_BASE = os.getenv(
++    "CONTEXT_KNOWLEDGE_BASE",
++    os.path.join(WORKSPACE_ROOT, "periodic_jobs", "ai_heartbeat", "docs", "KNOWLEDGE_BASE.md"),
++)
+ OBSERVATIONS_PATH = os.path.join(
+-    os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(KNOWLEDGE_BASE)))),
++    WORKSPACE_ROOT,
+     "contexts", "memory", "OBSERVATIONS.md"
+ )
+ 
+-PROMPT_TEMPLATE = """
++PROMPT_TEMPLATE = r"""
+ 【目标】：执行观测记忆提取并直接持久化到磁盘。
+ 【基准日期】：{target_date}
+ 
+@@ -26,8 +30,8 @@ PROMPT_TEMPLATE = """
+ 【任务内容】：
+ 1. **获取 Context**：请阅读上述 SOP 以及其中引用的 L3 约束文件。
+ 2. **幂等性检查**：读取 OBSERVATIONS.md，若已有 `Date: {target_date}` 则跳过后续步骤。
+-3. **扫描与过滤**：自主扫描根目录（/path/to/your/workspace）下的变动。
+-4. **写入记忆**：将针对 {target_date} 的 🔴 🟡 🟢 观测结果直接写入或追加到 `/path/to/your/workspace/contexts/memory/OBSERVATIONS.md`。**鼓励使用命令行 append**（如 `echo "..." >> OBSERVATIONS.md` 或 `tee -a`），避免对大文件做全文编辑。
++3. **扫描与过滤**：以 `{root_dir}` 为工作区根，只检查 `E:\MAP.md` 中登记的项目目录和本机项目会话记录；排除凭据、数据库、缓存、构建物和临时目录，不做无边界全盘递归。
++4. **写入记忆**：将针对 {target_date} 的 🔴 🟡 🟢 观测结果直接写入或追加到 `{observations_path}`。**鼓励使用命令行 append**，避免对大文件做全文编辑。
+ 5. **范围约束**：**仅执行 L1 Observer 任务**。不要执行 SOP 中提到的 L2 Reflector 任务（即不要修改 `rules/` 下的任何文件，不要进行规则晋升或垃圾回收）。
+ 6. **格式规范**：
+    - 日期 Header 必须严格使用 `Date: YYYY-MM-DD` 格式（Date 首字母大写，冒号后空格，日期为 ISO 格式）。
+@@ -40,8 +44,7 @@ def main():
+     parser = argparse.ArgumentParser(description='L1 Observer Agent')
+     parser.add_argument('date', nargs='?', default=datetime.now().strftime("%Y-%m-%d"),
+                         help='Target date (YYYY-MM-DD)')
+-    parser.add_argument('--model', default='<your-model-id>',
+-                        choices=['<your-model-id>'],
++    parser.add_argument('--model', default=os.getenv('OBSERVER_MODEL', 'deepseek/deepseek-flash'),
+                         help='Model ID to use')
+     parser.add_argument('--no-delete', action='store_true',
+                         help='Keep session after completion (default: delete)')
+@@ -66,7 +69,8 @@ def main():
+     if not session_id:
+         return
+ 
+-    prompt = PROMPT_TEMPLATE.format(kb_path=KNOWLEDGE_BASE, target_date=target_date)
++    prompt = PROMPT_TEMPLATE.format(kb_path=KNOWLEDGE_BASE, target_date=target_date,
++                                    root_dir=WORKSPACE_ROOT, observations_path=OBSERVATIONS_PATH)
+     client.send_message(session_id, prompt, model_id=model_id)
+     # If send_message timed out, agent may still be running; poll until done
+     print("Waiting for session to complete (sync mode)...")
+diff --git a/periodic_jobs/ai_heartbeat/src/v0/opencode_client.py b/periodic_jobs/ai_heartbeat/src/v0/opencode_client.py
+index a7156ff..24a57ac 100644
+--- a/periodic_jobs/ai_heartbeat/src/v0/opencode_client.py
++++ b/periodic_jobs/ai_heartbeat/src/v0/opencode_client.py
+@@ -23,12 +23,13 @@ class OpenCodeClient:
+         self.username = os.getenv("OPENCODE_USERNAME", "opencode")
+         self.password = os.getenv("OPENCODE_PASSWORD")
+ 
+-        if not self.password:
+-            raise ValueError("OPENCODE_PASSWORD not found in environment variables.")
+-
+-        credentials = f"{self.username}:{self.password}"
+-        encoded = base64.b64encode(credentials.encode()).decode()
+-        self.headers = {"Authorization": f"Basic {encoded}"}
++        self.headers = {}
++        # OpenCode's loopback server can run without Basic Auth. Keep auth support
++        # when configured, but do not require a secret for a localhost-only server.
++        if self.password:
++            credentials = f"{self.username}:{self.password}"
++            encoded = base64.b64encode(credentials.encode()).decode()
++            self.headers["Authorization"] = f"Basic {encoded}"
+ 
+     def list_sessions(self):
+         """GET /session - list all sessions."""
+@@ -94,7 +95,7 @@ class OpenCodeClient:
+             time.sleep(poll_interval)
+         return False
+ 
+-    def send_message(self, session_id, message, model_id="antigravity-gemini-3-flash", provider_id=None, agent="OpenCode-Builder"):
++    def send_message(self, session_id, message, model_id="antigravity-gemini-3-flash", provider_id=None, agent="build"):
+         try:
+             # Auto-detect provider from model_id if not specified
+             if provider_id is None:
+diff --git a/periodic_jobs/ai_heartbeat/src/v0/reflector.py b/periodic_jobs/ai_heartbeat/src/v0/reflector.py
+index ee6013c..efb3576 100644
+--- a/periodic_jobs/ai_heartbeat/src/v0/reflector.py
++++ b/periodic_jobs/ai_heartbeat/src/v0/reflector.py
+@@ -20,8 +20,12 @@ from datetime import datetime
+ 
+ from opencode_client import OpenCodeClient
+ 
+-KNOWLEDGE_BASE = "/path/to/your/workspace/periodic_jobs/ai_heartbeat/docs/KNOWLEDGE_BASE.md"
+-ROOT_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(KNOWLEDGE_BASE))))
++WORKSPACE_ROOT = os.getenv("CONTEXT_WORKSPACE_ROOT", os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", "..")))
++KNOWLEDGE_BASE = os.getenv(
++    "CONTEXT_KNOWLEDGE_BASE",
++    os.path.join(WORKSPACE_ROOT, "periodic_jobs", "ai_heartbeat", "docs", "KNOWLEDGE_BASE.md"),
++)
++ROOT_DIR = os.getenv("CONTEXT_RULES_ROOT", WORKSPACE_ROOT)
+ RULES_DIR = os.path.join(ROOT_DIR, "rules")
+ CANDIDATES_PATH = os.path.join(ROOT_DIR, "contexts", "memory", "RULE_CANDIDATES.md")
+ 
+@@ -86,7 +90,9 @@ def run(client, title, prompt, model_id):
+     session_id = client.create_session(title)
+     if not session_id:
+         return None
+-    client.send_message(session_id, prompt, model_id=model_id)
++    response = client.send_message(session_id, prompt, model_id=model_id)
++    if response is None:
++        return None
+     # If send_message timed out, agent may still be running; poll until done
+     print("Waiting for session to complete (sync mode)...")
+     client.wait_for_session_complete(session_id)
+@@ -96,8 +102,7 @@ def run(client, title, prompt, model_id):
+ def main():
+     import argparse
+     parser = argparse.ArgumentParser(description='L2 Reflector Agent')
+-    parser.add_argument('--model', default='<your-model-id>',
+-                        choices=['<your-model-id>'],
++    parser.add_argument('--model', default=os.getenv('REFLECTOR_MODEL', 'deepseek/deepseek-flash'),
+                         help='Model ID to use')
+     parser.add_argument('--apply', action='store_true',
+                         help='Merge the candidates a human has ticked into rules/ (default: only propose candidates)')
+@@ -111,6 +116,9 @@ def main():
+         print(f"Applying approved candidates from {CANDIDATES_PATH} using model: {model_id}...")
+         session_id = run(client, f"Heartbeat L2 Reflector Apply - {target_date}",
+                          APPLY_TEMPLATE.format(kb_path=KNOWLEDGE_BASE), model_id)
++        if not session_id:
++            print("ERROR: OpenCode could not accept the apply request.", file=sys.stderr)
++            sys.exit(1)
+         print(f"Task complete (Session: {session_id}).")
+         return
+ 
+@@ -118,6 +126,9 @@ def main():
+     before = snapshot(RULES_DIR)
+     session_id = run(client, f"Heartbeat L2 Reflector Propose - {target_date}",
+                      PROPOSE_TEMPLATE.format(kb_path=KNOWLEDGE_BASE, target_date=target_date), model_id)
++    if not session_id:
++        print("ERROR: OpenCode could not accept the proposal request; no candidates were written.", file=sys.stderr)
++        sys.exit(1)
+     touched = changed(before, snapshot(RULES_DIR))
+     if touched:
+         print("ERROR: rules/ changed during the propose stage, which is not allowed:", file=sys.stderr)

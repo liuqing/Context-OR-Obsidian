@@ -1,0 +1,11 @@
+*.log
+*.zip
+.env
+.venv/
+__pycache__/
+logs/
+*.sqlite
+*.sqlite3
+会话记录.md
+临时会话记录.md
+opencode.json
