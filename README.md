@@ -24,8 +24,8 @@ grapeot 的 [Context Infrastructure](https://github.com/grapeot/context-infrastr
 ## 快速开始
 
 ```powershell
-git clone --recurse-submodules https://github.com/liuqing/codex-archive-pipeline.git E:\workspace\codex-archive-pipeline
-cd E:\workspace\codex-archive-pipeline
+git clone --recurse-submodules https://github.com/liuqing/Context-OR-Obsidian.git E:\workspace\Context-OR-Obsidian
+cd E:\workspace\Context-OR-Obsidian
 powershell -ExecutionPolicy Bypass -File .\install.ps1
 ```
 
